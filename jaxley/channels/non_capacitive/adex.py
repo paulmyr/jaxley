@@ -318,7 +318,7 @@ def _heaviside_with_sigmoid_surrogate(x: Array, slope: float = 10.0) -> Array:
     Returns:
         Step function output with smooth gradient
     """
-    @jax.custom_vjp
+    @jax.custom_vjp                 # https://docs.jax.dev/en/latest/_autosummary/jax.custom_vjp.html
     def heaviside_surrogate(x):
         return (x >= 0.0).astype(jnp.float32)
 
@@ -348,7 +348,7 @@ def _heaviside_with_exponential_surrogate(x: Array, beta: float = 5.0) -> Array:
     Returns:
         Step function output with smooth gradient
     """
-    @jax.custom_vjp
+    @jax.custom_vjp                 # https://docs.jax.dev/en/latest/_autosummary/jax.custom_vjp.html
     def heaviside_surrogate(x):
         return (x >= 0.0).astype(jnp.float32)
 
@@ -376,7 +376,7 @@ def _heaviside_with_superspike_surrogate(x: Array, beta: float = 10.0) -> Array:
     Returns:
         Step function output with smooth gradient
     """
-    @jax.custom_vjp
+    @jax.custom_vjp                 # https://docs.jax.dev/en/latest/_autosummary/jax.custom_vjp.html
     def heaviside_surrogate(x):
         return (x >= 0.0).astype(jnp.float32)
 
