@@ -96,7 +96,10 @@ class AdEx(Channel):
         params: dict[str, Array]
     ) -> dict[str, Array]:
         """
-        Update adaptation variable and handle spike reset.
+        Update adaptation variable, integrate voltage, and handle spike reset.
+
+        Like Izhikevich, all dynamics are handled here. This allows proper clamping
+        of the exponential spike mechanism.
 
         Args:
             states: Current state dictionary
@@ -105,59 +108,7 @@ class AdEx(Channel):
             params: Parameter dictionary
 
         Returns:
-            Dictionary with updated states: v, w, and spikes
-        """
-        prefix = self._name
-
-        # Get parameters
-        a = params[f"{prefix}_a"]
-        E_L = params[f"{prefix}_E_L"]
-        tau_w = params[f"{prefix}_tau_w"]
-        b = params[f"{prefix}_b"]
-        v_threshold = params[f"{prefix}_v_threshold"]
-        v_reset = params[f"{prefix}_v_reset"]
-
-        # Get current adaptation state
-        w = states[f"{prefix}_w"]
-
-        # Update adaptation variable with exponential Euler
-        # dw/dt = (a * (v - E_L) - w) / tau_w
-        w_new = exponential_euler(w, dt, a * (v - E_L), tau_w)
-
-        # Check for spike
-        spike_occurred = v > v_threshold
-
-        # Reset voltage and update adaptation on spike
-        v_new = jax.lax.select(spike_occurred, v_reset, v)
-        w_new = jax.lax.select(spike_occurred, w_new + b, w_new)
-
-        return {
-            "v": v_new,
-            f"{prefix}_w": w_new,
-            f"{prefix}_spikes": spike_occurred
-        }
-
-    def compute_current(
-        self,
-        states: dict[str, Array],
-        v: Array,
-        params: dict[str, Array]
-    ) -> Array:
-        """
-        Compute the total AdEx membrane current.
-
-        Returns the sum of:
-        - Leak current: g_L * (V - E_L)
-        - Exponential current: -g_L * delta_T * exp((V - v_T) / delta_T)
-        - Adaptation current: +w
-
-        Args:
-            states: Current state dictionary
-            v: Membrane potential (mV)
-            params: Parameter dictionary
-
-        Returns:
-            Total membrane current
+            Dictionary with updated states: v, w, spikes
         """
         prefix = self._name
 
@@ -166,22 +117,64 @@ class AdEx(Channel):
         E_L = params[f"{prefix}_E_L"]
         v_T = params[f"{prefix}_v_T"]
         delta_T = params[f"{prefix}_delta_T"]
+        a = params[f"{prefix}_a"]
+        tau_w = params[f"{prefix}_tau_w"]
+        b = params[f"{prefix}_b"]
+        v_threshold = params[f"{prefix}_v_threshold"]
+        v_reset = params[f"{prefix}_v_reset"]
+        C = params["capacitance"]
 
-        # Get adaptation state
+        # Get current adaptation state
         w = states[f"{prefix}_w"]
 
-        # Compute currents
+        # Update adaptation variable with exponential Euler
+        # dw/dt = (a * (v - E_L) - w) / tau_w
+        w = exponential_euler(w, dt, a * (v - E_L), tau_w)
+
+        # Update voltage with Forward Euler (nonlinear, like Izhikevich)
+        # C * dv/dt = -g_L*(v-E_L) + g_L*delta_T*exp((v-v_T)/delta_T) - w
+        # Note: External current will be added by Jaxley's voltage solver on top of this... I hope
+
+        # Leak current
         i_leak = g_L * (v - E_L)
 
-        # Cap exponential argument to prevent numerical overflow
-        # When v >> v_T, the exponential explodes; cap at reasonable value
+        # Exponential spike current (clamped to prevent overflow)
         exp_arg = (v - v_T) / delta_T
-        exp_arg = jnp.minimum(exp_arg, 10.0)  # exp(20) ≈ 5e8
-        i_exp = -g_L * delta_T * save_exp(exp_arg)
+        exp_arg = jnp.minimum(exp_arg, 10.0)  # Clamp at exp(10) ≈ 22000
+        i_exp = g_L * delta_T * save_exp(exp_arg)
 
+        # Adaptation current
         i_adapt = w
 
-        return i_leak + i_exp + i_adapt
+        # Total derivative
+        dv = (-i_leak + i_exp - i_adapt) / C
+        v = v + dt * dv
+
+        # Check for spike and reset
+        condition = v >= v_threshold
+        v = jax.lax.select(condition, v_reset, v)
+        w = jax.lax.select(condition, w + b, w)
+
+        return {
+            "v": v,
+            f"{prefix}_w": w,
+            f"{prefix}_spikes": condition.astype(jnp.float32)
+        }
+
+    def compute_current(
+                self,
+                states: dict[str, Array],
+                v: Array,
+                params: dict[str, Array]
+        ) -> Array:
+        """
+        Return zero current since all dynamics are handled in update_states.
+
+        Like Izhikevich, AdEx integrates voltage directly in update_states,
+        so compute_current returns zero to avoid double-integration.
+        """
+        return jnp.zeros((1,))
+
 
     def init_state(
         self,
