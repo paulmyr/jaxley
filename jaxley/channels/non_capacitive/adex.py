@@ -60,6 +60,7 @@ class AdEx(Channel):
         # These defaults give reasonable tonic spiking behavior
         self.channel_params = {
             # Leak parameters
+            f"{prefix}_C_m": 200.,
             f"{prefix}_g_L": 6e-5,          # S/cm^2 (leak conductance density)
             f"{prefix}_E_L": -70.0,         # mV
             # Exponential spike parameters
