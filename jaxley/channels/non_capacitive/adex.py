@@ -113,16 +113,17 @@ class AdEx(Channel):
         prefix = self._name
 
         # Get parameters
+        C_m = params[f"{prefix}_C_m"]
         g_L = params[f"{prefix}_g_L"]
         E_L = params[f"{prefix}_E_L"]
         v_T = params[f"{prefix}_v_T"]
-        delta_T = params[f"{prefix}_delta_T"]
-        a = params[f"{prefix}_a"]
-        tau_w = params[f"{prefix}_tau_w"]
-        b = params[f"{prefix}_b"]
-        v_threshold = params[f"{prefix}_v_threshold"]
         v_reset = params[f"{prefix}_v_reset"]
-        C = params["capacitance"]
+        v_threshold = params[f"{prefix}_v_threshold"]
+        delta_T = params[f"{prefix}_delta_T"]
+
+        tau_w = params[f"{prefix}_tau_w"]
+        a = params[f"{prefix}_a"]
+        b = params[f"{prefix}_b"]
 
         # Get current adaptation state
         w = states[f"{prefix}_w"]
@@ -147,7 +148,7 @@ class AdEx(Channel):
         i_adapt = w
 
         # Total derivative
-        dv = (-i_leak + i_exp - i_adapt) / C
+        dv = (-i_leak + i_exp - i_adapt) / C_m
         v = v + dt * dv
 
         # Check for spike and reset
@@ -184,16 +185,7 @@ class AdEx(Channel):
         delta_t: float
     ) -> dict[str, Array]:
         """
-        Initialize adaptation variable.
-
-        Sets w to its steady-state value: w = a * (v - E_L)
         """
-        prefix = self._name
-        a = params[f"{prefix}_a"]
-        E_L = params[f"{prefix}_E_L"]
-
-        # return {f"{prefix}_w": a * (v - E_L)}
-        # return {f"{prefix}_w": 0 * v}
         return {}
 
 
