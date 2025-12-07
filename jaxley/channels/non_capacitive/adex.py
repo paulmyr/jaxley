@@ -49,7 +49,7 @@ class AdEx(Channel):
         b: Spike-triggered adaptation (default: 0.0 pA)
     """
 
-    def __init__(self, name: Optional[str] = None):
+    def __init__(self, name: Optional[str] = None, surrogate_warning=True):
         self.current_is_in_mA_per_cm2 = True
         super().__init__(name)
 
@@ -61,18 +61,18 @@ class AdEx(Channel):
         self.channel_params = {
             # Leak parameters
             f"{prefix}_C_m": 200.,
-            f"{prefix}_g_L": 6e-5,          # S/cm^2 (leak conductance density)
+            f"{prefix}_g_L": 10,          # S/cm^2 (leak conductance density)
             f"{prefix}_E_L": -70.0,         # mV
             # Exponential spike parameters
             f"{prefix}_v_T": -50.0,         # mV (spike threshold)
             f"{prefix}_delta_T": 2.0,       # mV (spike slope factor)
             # Spike reset parameters
             f"{prefix}_v_threshold": 0.0,   # mV (detection threshold)
-            f"{prefix}_v_reset": -70.0,     # mV (reset potential)
+            f"{prefix}_v_reset": -58.0,     # mV (reset potential)
             # Adaptation parameters
             f"{prefix}_tau_w": 30.0,        # ms
-            f"{prefix}_a": 1e-5,            # S/cm^2 (sub-threshold adaptation)
-            f"{prefix}_b": 3e-7,            # mA/cm^2 (spike-triggered adaptation)
+            f"{prefix}_a": 2,            # S/cm^2 (sub-threshold adaptation)
+            f"{prefix}_b": 0,            # mA/cm^2 (spike-triggered adaptation)
         }
 
         # AdEx state variables
@@ -83,11 +83,12 @@ class AdEx(Channel):
 
         self.current_name = f"i_{prefix}"
 
-        warn(
-            f"The {self.name} channel does not support surrogate gradients. "
-            "Its gradient will be zero after every spike. "
-            "Use AdExSurrogate for differentiable spiking."
-        )
+        if surrogate_warning:
+            warn(
+                f"The {self.name} channel does not support surrogate gradients. "
+                "Its gradient will be zero after every spike. "
+                "Use AdExSurrogate for differentiable spiking."
+            )
 
     def update_states(
         self,
@@ -153,14 +154,14 @@ class AdEx(Channel):
         v = v + dt * dv
 
         # Check for spike and reset
-        condition = v >= v_threshold
-        v = jax.lax.select(condition, v_reset, v)
-        w = jax.lax.select(condition, w + b, w)
+        spike_occurred  = v >= v_threshold
+        v = jax.lax.select(spike_occurred, v_reset, v)
+        w = jax.lax.select(spike_occurred, w + b, w)
 
         return {
             "v": v,
             f"{prefix}_w": w,
-            f"{prefix}_spikes": condition.astype(jnp.float32)
+            f"{prefix}_spikes": spike_occurred.astype(jnp.float32)
         }
 
     def compute_current(
@@ -208,17 +209,16 @@ class AdExSurrogate(AdEx):
     Example:
         >>> cell = jx.Cell()
         >>> cell.insert(AdExSurrogate(surrogate_type="sigmoid", surrogate_slope=10.0))
-        >>> cell.make_trainable("AdExSurrogate_g_L")
+        >>> cell.make_trainable("AdEx_g_L")
     """
 
     def __init__(
         self,
         surrogate_type: str = "sigmoid",
         surrogate_slope: float = 10.0,
-        name: Optional[str] = None
     ):
         self.current_is_in_mA_per_cm2 = True
-        super().__init__("AdEx")
+        super().__init__("AdEx", False)
 
         # Store surrogate gradient configuration
         self.surrogate_type = surrogate_type
@@ -256,34 +256,57 @@ class AdExSurrogate(AdEx):
         Forward pass: Hard threshold (same as AdEx)
         Backward pass: Smooth surrogate gradient
         """
-        prefix = self._name
+        prefix = "AdEx"
 
         # Get parameters
-        a = params[f"{prefix}_a"]
+        C_m = params[f"{prefix}_C_m"]
+        g_L = params[f"{prefix}_g_L"]
         E_L = params[f"{prefix}_E_L"]
-        tau_w = params[f"{prefix}_tau_w"]
-        b = params[f"{prefix}_b"]
-        v_threshold = params[f"{prefix}_v_threshold"]
+        v_T = params[f"{prefix}_v_T"]
         v_reset = params[f"{prefix}_v_reset"]
+        v_threshold = params[f"{prefix}_v_threshold"]
+        delta_T = params[f"{prefix}_delta_T"]
+
+        tau_w = params[f"{prefix}_tau_w"]
+        a = params[f"{prefix}_a"]
+        b = params[f"{prefix}_b"]
 
         # Get current adaptation state
         w = states[f"{prefix}_w"]
 
-        # Update adaptation variable
-        w_new = exponential_euler(w, dt, a * (v - E_L), tau_w)
+        # Update adaptation variable with exponential Euler
+        # dw/dt = (a * (v - E_L) - w) / tau_w
+        w = exponential_euler(w, dt, a * (v - E_L), tau_w)
 
-        # Check for spike with surrogate gradient (differentiable)
+        # Update voltage with Forward Euler (nonlinear, like Izhikevich)
+        # C * dv/dt = -g_L*(v-E_L) + g_L*delta_T*exp((v-v_T)/delta_T) - w
+        # Note: External current will be added by Jaxley's voltage solver on top of this... I hope
+
+        # Leak current
+        i_leak = g_L * (v - E_L)
+
+        # Exponential spike current (clamped to prevent overflow)
+        exp_arg = (v - v_T) / delta_T
+        exp_arg = jnp.minimum(exp_arg, 10.0)  # Clamp at exp(10) ≈ 22000
+        i_exp = g_L * delta_T * save_exp(exp_arg)
+
+        # Adaptation current
+        i_adapt = w
+
+        # Total derivative
+        dv = (-i_leak + i_exp - i_adapt) / C_m
+        v = v + dt * dv
+
         spike_occurred = self.surrogate_fn(v - v_threshold)
-
-        # Reset voltage and update adaptation (differentiable)
-        v_new = spike_occurred * v_reset + (1.0 - spike_occurred) * v
-        w_new = spike_occurred * (w_new + b) + (1.0 - spike_occurred) * w_new
+        v = spike_occurred * v_reset + (1.0 - spike_occurred) * v
+        w = spike_occurred * (w + b) + (1.0 - spike_occurred) * w
 
         return {
-            "v": v_new,
-            f"{prefix}_w": w_new,
-            f"{prefix}_spikes": spike_occurred
+            "v": v,
+            f"{prefix}_w": w,
+            f"{prefix}_spikes": spike_occurred.astype(jnp.float32)
         }
+
 
 
 # ============================================================================

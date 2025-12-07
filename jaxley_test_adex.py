@@ -7,9 +7,11 @@ import matplotlib.pyplot as plt
 #sys.path.insert(0, '/content/jaxley')
 
 import jaxley as jx
-from jaxley.channels import AdEx
+from jaxley.channels import AdEx, AdExSurrogate
 
 from brian2 import *
+
+from jaxley.channels.non_capacitive.adex import AdExSurrogate
 
 """Parameters from the paper:"""
 
@@ -119,7 +121,7 @@ def plot_comparison(brian2_results, jaxley_results, params, title="AdEx Comparis
 
     # Spike raster / difference plot
     if len(spikes_brian) > 0:
-        axes[2, 1].eventplot([spikes_brian], colors='b', lineoffsets=1, linestyle='--', linelengths=0.1, label='Brian2 spikes')
+        axes[2, 1].eventplot([spikes_brian], colors='b', lineoffsets=1, linelengths=0.1, label='Brian2 spikes')
         axes[2, 1].set_ylabel('Spikes')
         axes[2, 1].set_xlabel('Time (ms)')
         axes[2, 1].set_title('Spike Times')
@@ -142,7 +144,7 @@ def plot_comparison(brian2_results, jaxley_results, params, title="AdEx Comparis
     return fig
 
 
-def run_brian2_adex(params, I_ext, dt_ms=0.025, duration_ms=500.0):
+def run_brian2_adex(params, dt_ms=0.025, duration_ms=500.0):
     """
     Run AdEx simulation using Brian2.
 
@@ -168,7 +170,7 @@ def run_brian2_adex(params, I_ext, dt_ms=0.025, duration_ms=500.0):
     b = params['b'] * pA
 
     # External current
-    I_input = I_ext * pA
+    I_input = params['I'] * pA
 
     # AdEx equations (standard form from Brette & Gerstner 2005)
     eqs = '''
@@ -213,7 +215,7 @@ def geometry_for_capacitance(C_pF, specific_capacitance=1.0):
     return radius_um, length_um, area_cm2
 
 
-def run_jaxley_adex(params, I_ext, dt_ms=0.025, duration_ms=500.0):
+def run_jaxley_adex(params, dt_ms=0.025, duration_ms=500.0):
     """
     Run AdEx simulation using Jaxley.
 
@@ -226,8 +228,6 @@ def run_jaxley_adex(params, I_ext, dt_ms=0.025, duration_ms=500.0):
     Returns:
         time_array, voltage_array, w_array
     """
-
-    mode = 'tonic'
 
     radius_um, length_um, area_cm2 = geometry_for_capacitance(params['C_m'])
 
@@ -273,9 +273,6 @@ def run_jaxley_adex(params, I_ext, dt_ms=0.025, duration_ms=500.0):
     w_array = np.array(results[1]).flatten()
     spikes_array = np.array(results[2]).flatten()
 
-    # Convert w from mA/cm² back to pA for comparison
-    w_array_pA = w_array * area_cm2 * 1e12
-
     # Create time array with same length as voltage
     time_array = np.arange(len(voltage_array)) * dt_ms
 
@@ -283,7 +280,7 @@ def run_jaxley_adex(params, I_ext, dt_ms=0.025, duration_ms=500.0):
     spike_indices = np.where(spikes_array > 0.5)[0]
     spike_times = time_array[spike_indices] if len(spike_indices) > 0 else np.array([])
 
-    return time_array, voltage_array, w_array_pA, spike_times
+    return time_array, voltage_array, w_array, spike_times
 
 
 if __name__ == '__main__':
@@ -296,11 +293,11 @@ if __name__ == '__main__':
         parameters = NAUD_PARAMETERS[module]
 
         t_brian, v_brian, w_brian, spikes_brian = run_brian2_adex(
-            parameters, parameters['I'], dt_ms=dt, duration_ms=duration
+            parameters, dt_ms=dt, duration_ms=duration
         )
 
         t_jaxley, v_jaxley, w_jaxley, s_jaxley = run_jaxley_adex(
-            parameters, parameters['I'], dt_ms=dt, duration_ms=duration
+            parameters, dt_ms=dt, duration_ms=duration
         )
 
         fig = plot_comparison(
