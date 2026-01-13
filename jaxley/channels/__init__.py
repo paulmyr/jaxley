@@ -6,6 +6,7 @@ from jaxley.channels.hh import HH, K, Leak, Na
 from jaxley.channels.non_capacitive.izhikevich import Izhikevich
 from jaxley.channels.non_capacitive.rate import Rate
 from jaxley.channels.non_capacitive.spike import Fire
+from jaxley.channels.non_capacitive.adex import AdEx
 
 __all__ = [
     "Channel",
@@ -14,6 +15,7 @@ __all__ = [
     "K",
     "Leak",
     "Izhikevich",
+    "AdEx"
     "Rate",
     "Fire",
 ]
